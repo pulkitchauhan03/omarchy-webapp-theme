@@ -1,27 +1,23 @@
 const HOST = "com.omarchy.webapp_theme";
+let currentTheme = null;
 
-// Every site a pack supports, straight from the manifest's content-script
-// matches — adding a pack never touches this file.
-const MATCH_PATTERNS = [
-  ...new Set(chrome.runtime.getManifest().content_scripts.flatMap((cs) => cs.matches)),
-];
-// Bare hostnames for the cheap onUpdated filter ("*://*.slack.com/*" → slack.com).
-const MATCH_HOSTS = [
-  ...new Set(
-    MATCH_PATTERNS.map((p) =>
-      p.replace(/^\*:\/\//, "").replace(/\/.*$/, "").replace(/^\*\./, "")
-    )
-  ),
-];
+// Let the actual content scripts subscribe rather than discovering them by tab
+// URL. Zen can omit tabs from tabs.query(), and Slack's huddle pop-outs can be
+// reported as about:blank. Ports work in both cases without a "tabs" permission.
+const themeClients = new Set();
 
-function isThemedUrl(url) {
-  try {
-    const host = new URL(url).hostname;
-    return MATCH_HOSTS.some((h) => host === h || host.endsWith("." + h));
-  } catch (_) {
-    return false;
-  }
-}
+chrome.runtime.onConnect.addListener((client) => {
+  if (client.name !== "omarchy-theme") return;
+  themeClients.add(client);
+  client.onDisconnect.addListener(() => {
+    void chrome.runtime.lastError;
+    themeClients.delete(client);
+  });
+  chrome.storage.local.get("theme", ({ theme }) => {
+    const latest = currentTheme || theme;
+    if (latest && themeClients.has(client)) sendTheme(client, latest);
+  });
+});
 
 let port = null;
 let reconnectTimer = null;
@@ -48,6 +44,7 @@ function connect() {
       return;
     }
     console.log("[omarchy] theme pushed by native host:", theme.theme_name, theme.bg);
+    currentTheme = theme;
     chrome.storage.local.set({ theme });
     broadcast(theme);
   });
@@ -73,36 +70,29 @@ function scheduleReconnect() {
 }
 
 function broadcast(theme) {
-  chrome.tabs.query({ url: MATCH_PATTERNS }, (tabs) => {
-    console.log("[omarchy] broadcasting theme to", tabs.length, "themed tab(s)");
-    for (const t of tabs) {
-      chrome.tabs.sendMessage(t.id, { type: "omarchy-theme", theme }).catch(() => {});
-    }
-  });
+  console.log("[omarchy] broadcasting theme to", themeClients.size, "page(s)");
+  for (const client of themeClients) sendTheme(client, theme);
+}
+
+function sendTheme(client, theme) {
+  try {
+    client.postMessage({ type: "omarchy-theme", theme });
+  } catch (_) {
+    themeClients.delete(client);
+  }
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === "request-theme") {
-    chrome.storage.local.get("theme").then(({ theme }) => sendResponse(theme || null));
+    chrome.storage.local.get("theme", ({ theme }) => sendResponse(currentTheme || theme || null));
     return true;
   }
-  // Kept for content.js, which asks for a guaranteed-current theme right before
-  // driving Slack's Color Mode radio. Storage is already current: omarchy fires
-  // its theme-set hook after the new theme's files are final, the host pushes
-  // immediately, and we write storage on that push — all before the content
-  // script gets the broadcast that makes it ask. So there's nothing to go fetch.
+  // Slack asks again before driving its Color Mode radio. Prefer the in-memory
+  // push: storage writes are asynchronous and may still be in flight.
   if (msg && msg.type === "request-fresh-theme") {
-    chrome.storage.local.get("theme").then(({ theme }) => sendResponse(theme || null));
+    chrome.storage.local.get("theme", ({ theme }) => sendResponse(currentTheme || theme || null));
     return true;
   }
-});
-
-chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
-  if (info.status !== "complete") return;
-  if (!tab.url || !isThemedUrl(tab.url)) return;
-  chrome.storage.local.get("theme").then(({ theme }) => {
-    if (theme) chrome.tabs.sendMessage(tabId, { type: "omarchy-theme", theme }).catch(() => {});
-  });
 });
 
 chrome.runtime.onInstalled.addListener(connect);

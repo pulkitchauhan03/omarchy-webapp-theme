@@ -1656,9 +1656,7 @@ function dispatchClick(el) {
 function reactClick(el) {
   const marker = "omarchy-" + Math.random().toString(36).slice(2);
   el.setAttribute("data-omarchy-target", marker);
-  document.dispatchEvent(
-    new CustomEvent("omarchy:react-click", { detail: { marker } })
-  );
+  OmarchyTheme.dispatchPageEvent("omarchy:react-click", { marker });
   setTimeout(() => el.removeAttribute("data-omarchy-target"), 200);
 }
 

@@ -4,8 +4,9 @@
 # install — the native-messaging host manifests.
 #
 # Usage:
-#   ./install.sh [--no-flags] [--uninstall]
+#   ./install.sh [--firefox] [--no-flags] [--uninstall]
 #
+#   --firefox    Set up Firefox/Zen only; load the add-on via about:debugging.
 #   --no-flags   Skip editing ~/.config/<browser>-flags.conf. Use this if you'd
 #                rather load the extension by hand via Developer mode.
 #   --uninstall  Reverse everything this script installs.
@@ -32,6 +33,7 @@ if [[ -f "$REPO/native-host/omarchy-webapp-theme-host" ]]; then
   PACKAGED=0
   HOST_SCRIPT="$REPO/native-host/omarchy-webapp-theme-host"
   HOST_TEMPLATE="$REPO/native-host/com.omarchy.webapp_theme.json.template"
+  FIREFOX_TEMPLATE="$REPO/native-host/com.omarchy.webapp_theme.firefox.json.template"
   HOOK_SCRIPT="$REPO/hooks/omarchy-webapp-theme"
   EXT_DIR="$REPO/extension"
 elif [[ -d $SHARE_DIR ]]; then
@@ -40,6 +42,7 @@ elif [[ -d $SHARE_DIR ]]; then
   PACKAGED=1
   HOST_SCRIPT="/usr/bin/omarchy-webapp-theme-host"
   HOST_TEMPLATE=""
+  FIREFOX_TEMPLATE="$SHARE_DIR/native-host/com.omarchy.webapp_theme.firefox.json.template"
   HOOK_SCRIPT="$SHARE_DIR/hooks/omarchy-webapp-theme"
   EXT_DIR="$SHARE_DIR/extension"
 else
@@ -68,13 +71,15 @@ HOOKS_DIR="$HOME/.config/omarchy/hooks"
 
 DO_FLAGS=1
 DO_UNINSTALL=0
+DO_FIREFOX=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
   --no-flags) DO_FLAGS=0 ;;
+  --firefox) DO_FIREFOX=1 ;;
   --uninstall) DO_UNINSTALL=1 ;;
   -h | --help)
-    sed -n '2,14p' "$0"
+    sed -n '2,15p' "$0"
     exit 0
     ;;
   *)
@@ -84,6 +89,15 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+# Native host discovery is vendor-wide, not per-profile: native Firefox and
+# Zen (Vendor=Mozilla) on Linux both look here, even though Zen's profiles live
+# elsewhere. Flatpak/sandboxed builds need their own host bridge and aren't
+# supported by this installer. Keep Chromium's existing wiring untouched.
+FIREFOX_HOST_DIR="$HOME/.mozilla/native-messaging-hosts"
+if ((DO_FIREFOX)); then
+  MARKER="omarchy-webapp-theme-firefox"
+fi
 
 # Every Chromium-family profile root that supports native messaging. Mirrors
 # omarchy's own bin/omarchy-install-chromium-copy-url — we write to all of them
@@ -167,6 +181,38 @@ remove_host_manifests() {
     fi
   done
   echo "  removed $count host manifest(s)"
+}
+
+install_firefox_manifest() {
+  [[ -f $FIREFOX_TEMPLATE ]] || {
+    echo "Error: missing $FIREFOX_TEMPLATE" >&2
+    exit 1
+  }
+  local manifest escaped_path
+  # Escape both JSON string characters and sed's replacement metacharacters.
+  escaped_path=${HOST_SCRIPT//\\/\\\\}
+  escaped_path=${escaped_path//\"/\\\"}
+  escaped_path=${escaped_path//\\/\\\\}
+  escaped_path=${escaped_path//&/\\&}
+  escaped_path=${escaped_path//|/\\|}
+  manifest=$(sed "s|__HOST_PATH__|$escaped_path|g" "$FIREFOX_TEMPLATE")
+  mkdir -p "$FIREFOX_HOST_DIR"
+  printf '%s\n' "$manifest" >"$FIREFOX_HOST_DIR/$HOST_NAME.json"
+  echo "  Firefox/Zen native-messaging host registered"
+}
+
+remove_firefox_manifest() {
+  local file="$FIREFOX_HOST_DIR/$HOST_NAME.json"
+  [[ -f $file ]] || return 0
+  # Don't remove a different checkout's registration.
+  local escaped_path=${HOST_SCRIPT//\\/\\\\}
+  escaped_path=${escaped_path//\"/\\\"}
+  if grep -qF "\"path\": \"$escaped_path\"" "$file"; then
+    rm -f "$file"
+    echo "  removed Firefox/Zen native-messaging host manifest"
+  else
+    echo "  kept Firefox/Zen host manifest (owned by another install)"
+  fi
 }
 
 # --------------------------------------------------------------------- hook --
@@ -292,6 +338,12 @@ remove_flags() {
 
 if ((DO_UNINSTALL)); then
   echo "Uninstalling Omarchy Web App Theme..."
+  if ((DO_FIREFOX)); then
+    remove_firefox_manifest
+    remove_hook
+    echo "Done. Remove the add-on in Firefox/Zen's about:addons. Chromium was not changed."
+    exit 0
+  fi
   ((PACKAGED)) || remove_host_manifests
   remove_hook
   remove_flags
@@ -326,6 +378,18 @@ done
 ((PACKAGED)) || chmod +x "$HOST_SCRIPT" "$HOOK_SCRIPT" 2>/dev/null || true
 
 echo "Setting up Omarchy Web App Theme..."
+if ((DO_FIREFOX)); then
+  install_firefox_manifest
+  install_hook
+  echo
+  echo "Native setup done. Chromium was not changed. In Firefox/Zen 140+:"
+  echo "  1. Open about:debugging#/runtime/this-firefox."
+  echo "  2. Choose 'Load Temporary Add-on' and select $EXT_DIR/manifest.json."
+  echo "  3. Grant site access if prompted, then reload a supported site."
+  echo "Temporary add-ons disappear on browser restart. Permanent installation"
+  echo "requires a Mozilla-signed XPI; this script does not bypass signing."
+  exit 0
+fi
 remove_legacy
 if ((PACKAGED)); then
   echo "  native-messaging host: /etc/chromium/native-messaging-hosts (owned by the package)"
