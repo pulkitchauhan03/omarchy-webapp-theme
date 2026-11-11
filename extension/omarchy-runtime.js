@@ -25,6 +25,14 @@ const OmarchyTheme = {
   _pendingTheme: null, // theme held until pack + settings both exist
   current: null, // { theme, surfaces } — app packs read this for re-paints
 
+  // Firefox isolates extension-owned objects from page scripts (Xrays).
+  // Clone only our tiny bridge payload into the page compartment so the
+  // MAIN-world shim can read CustomEvent.detail. Chromium needs no clone.
+  dispatchPageEvent(type, detail) {
+    const pageDetail = typeof cloneInto === "function" ? cloneInto(detail, window) : detail;
+    document.dispatchEvent(new CustomEvent(type, { detail: pageDetail }));
+  },
+
   register(pack) {
     this._pack = pack;
     // Packs load in a separate content-script entry from the engine, so the
@@ -84,9 +92,7 @@ const OmarchyTheme = {
     document.documentElement.style.colorScheme = isDark ? "dark" : "light";
 
     // Harmless if an app ever adds an OS-sync option.
-    document.dispatchEvent(
-      new CustomEvent("omarchy:set-color-scheme", { detail: { dark: isDark } })
-    );
+    this.dispatchPageEvent("omarchy:set-color-scheme", { dark: isDark });
 
     // Drive the app's own Color Mode only when the mode crosses light↔dark.
     if (this._lastIsDark !== isDark) {
@@ -180,9 +186,29 @@ try {
   OmarchyTheme._settings = {};
 }
 
-// Themes arrive two ways: pushed live by background.js on an omarchy theme-set,
-// and fetched once on load. Both funnel through OmarchyTheme.apply(), which
-// pends them until the pack and settings are in.
+// Subscribe directly: Firefox/Zen and about:blank pop-outs need not expose a
+// discoverable tab URL. Reconnect if an event page is unloaded or a page is
+// restored from the back-forward cache while its old port is disconnected.
+function connectThemeChannel() {
+  try {
+    const channel = chrome.runtime.connect({ name: "omarchy-theme" });
+    channel.onMessage.addListener((msg) => {
+      if (msg && msg.type === "omarchy-theme") OmarchyTheme.apply(msg.theme);
+    });
+    channel.onDisconnect.addListener(() => {
+      void chrome.runtime.lastError;
+      if (chrome.runtime.id) setTimeout(connectThemeChannel, 3000);
+    });
+  } catch (_) {
+    // An extension reload invalidates old content-script contexts. Refresh the
+    // tab in that case; don't create a timer loop in an invalid context.
+  }
+}
+connectThemeChannel();
+
+// Keep the one-shot request and legacy message receiver for startup races and
+// compatibility. All paths funnel through apply(), which de-dups and waits for
+// the pack and settings before painting.
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg && msg.type === "omarchy-theme") OmarchyTheme.apply(msg.theme);
 });

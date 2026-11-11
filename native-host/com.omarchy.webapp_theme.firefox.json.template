@@ -1,0 +1,9 @@
+{
+  "name": "com.omarchy.webapp_theme",
+  "description": "Omarchy theme reader for Firefox and Zen",
+  "path": "__HOST_PATH__",
+  "type": "stdio",
+  "allowed_extensions": [
+    "omarchy-webapp-theme@pulkitchauhan03.github.io"
+  ]
+}

@@ -10,6 +10,12 @@ Built and tested on Brave on Arch Linux + Omarchy. Works on Brave Origin,
 Chrome, Chromium, Edge, and Helium (helium-browser-bin) — the fork Omarchy's
 web apps use by default.
 
+This fork also includes **desktop Firefox/Zen support (Gecko 140+)**. The
+native-host connection, initial theme, live dark/light switching, and page
+bridge have been smoke-tested in an isolated Zen profile. Individual logged-in
+site flows, especially Slack's Preferences automation, still need manual
+Firefox/Zen testing.
+
 > Known as `omarchy-slack-theme` through 0.2.x, back when Slack was the only
 > pack.
 
@@ -43,9 +49,9 @@ https://github.com/user-attachments/assets/5c67741e-c6df-4f48-8c1a-72eadcc805bb
                                                           ▼
 ┌──────────────┐   length-prefixed JSON   ┌────────────────────┐
 │  native host │ ────────────────────────►│  Browser service   │
-│  (bash)      │   push-only, never read  │  worker (MV3 bg)   │
+│  (bash)      │   push-only, never read  │ worker / event page│
 │              │                          └────────┬───────────┘
-└──────────────┘                                   │ chrome.tabs.sendMessage
+└──────────────┘                                   │ runtime.Port.postMessage
    reads (Omarchy 4):                              ▼
    ~/.local/state/omarchy/current/  ┌────────────────────────────┐
      theme.name                     │  Content script on Slack   │
@@ -78,6 +84,7 @@ background — robust to themes that don't use the obvious day/night naming
 ## Requirements
 
 - Brave, Brave Origin, Chrome, Chromium, Edge, or Helium — Manifest V3
+- Or native Linux Firefox/Zen based on Gecko 140+
 - Bash + coreutils. No Python, no runtime dependencies.
 - Linux + [Omarchy](https://omarchy.org/) **4+** — the host reads
   `~/.local/state/omarchy/current/` and is driven by the `theme-set.d` hook.
@@ -85,6 +92,51 @@ background — robust to themes that don't use the obvious day/night naming
   `colors.toml` if that's missing)
 
 ## Install
+
+### Firefox / Zen (this fork)
+
+From a checkout of **this fork**, run as your normal user:
+
+```sh
+./install.sh --firefox
+```
+
+This registers the Bash host in `~/.mozilla/native-messaging-hosts/` (shared by
+native Firefox and Zen on Linux) and installs a separate
+`omarchy-webapp-theme-firefox` theme-set hook. It does not edit Chromium's
+flags, replace its hook, install the add-on automatically, or change browser
+security preferences. Keep the checkout at the same path while installed.
+
+To test without signing:
+
+1. Open `about:debugging#/runtime/this-firefox` in Firefox or Zen.
+2. Click **Load Temporary Add-on** and select `extension/manifest.json` from
+   this checkout.
+3. Grant site access if prompted, reload a supported site, and follow
+   **Per-site setup** below.
+4. Switch your Omarchy theme to check live updates.
+
+**Temporary add-ons disappear when the browser restarts.** Normal Firefox
+releases require a **Mozilla-signed XPI** for permanent installation; use
+Mozilla's unlisted/self-distribution signing workflow if you do not want a
+public AMO listing. This repository does not contain a signed XPI and the
+installer does not bypass signing. Keep the manifest's Gecko ID unchanged when
+signing: it must match the native host's `allowed_extensions`.
+
+Firefox's console may warn about the Chromium-only `key` and
+`background.service_worker` entries; Firefox uses `background.scripts` instead.
+Flatpak/sandboxed Firefox and Zen are not supported by this installer: they need
+additional host-bridge configuration. Firefox Android is not a target.
+
+To remove only Firefox/Zen wiring:
+
+```sh
+./install.sh --firefox --uninstall
+```
+
+Then remove the add-on in `about:addons`. Chromium's configuration is left
+alone. The upstream AUR package does **not** include this fork's changes; use
+this checkout until a package/release containing them is available.
 
 ### From the AUR
 
@@ -175,6 +227,23 @@ A few packs also leave things deliberately untouched:
   authored rather than transforming it for dark mode.
 
 ## Verifying it works
+
+For Firefox/Zen, inspect the add-on from
+`about:debugging#/runtime/this-firefox` to see its background console. From a
+development checkout, run the regression tests with Node.js, and optionally the
+real-Gecko smoke test with Python 3 and an installed browser:
+
+```sh
+node --test tests/firefox.test.mjs
+python tests/firefox-smoke.py /usr/bin/zen-browser
+# Or: python tests/firefox-smoke.py /usr/bin/firefox
+```
+
+The smoke test uses a disposable HOME/profile and a localhost fixture. It does
+not touch your normal browser, theme, or native-host registration. It tests the
+actual extension and Bash host, initial palette, live theme push, `matchMedia`
+updates, and the React-click bridge; it is not an end-to-end test of logged-in
+Slack or the other live sites.
 
 Open DevTools on the Slack tab and filter the console by `omarchy`. A
 successful theme switch looks like:

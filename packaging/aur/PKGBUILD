@@ -50,6 +50,11 @@ package() {
   install -Dm755 hooks/omarchy-webapp-theme \
     "$pkgdir/usr/share/$pkgname/hooks/omarchy-webapp-theme"
 
+  # Firefox/Zen setup writes a per-user manifest with allowed_extensions,
+  # rather than Chromium's allowed_origins. No browser preferences are edited.
+  install -Dm644 native-host/com.omarchy.webapp_theme.firefox.json.template \
+    "$pkgdir/usr/share/$pkgname/native-host/com.omarchy.webapp_theme.firefox.json.template"
+
   # System-wide native-messaging manifests, so no per-user registration is
   # needed. Verified against the shipped binaries' compiled-in search paths:
   #   /etc/chromium/native-messaging-hosts   -> chromium AND brave
